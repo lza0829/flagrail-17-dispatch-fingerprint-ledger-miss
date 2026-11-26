@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+COPY scripts ./scripts
+ENV 数据目录=/data 夹具目录=/fixtures
+EXPOSE 11800
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "11800"]
