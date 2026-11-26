@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.db import 连接
+from app.modules import 下发快照指纹账 as 指纹账
 
 
 def 此刻() -> str:
@@ -8,28 +9,22 @@ def 此刻() -> str:
 
 
 def 跑贯验() -> dict:
-    from app.modules import 下发快照指纹账 as _bf_17
-    _ = _bf_17.二次意图放行(None, "")
     conn = 连接()
     try:
         版本数 = conn.execute("SELECT COUNT(*) FROM 开关版本").fetchone()[0]
         下发数 = conn.execute("SELECT COUNT(*) FROM 下发票").fetchone()[0]
         回读数 = conn.execute("SELECT COUNT(*) FROM 回读证").fetchone()[0]
         命运数 = conn.execute("SELECT COUNT(*) FROM 命运账").fetchone()[0]
+        指纹数 = conn.execute("SELECT COUNT(*) FROM 下发快照指纹账表").fetchone()[0]
 
         问题 = []
-        
         for r in conn.execute("SELECT 票号, 版本键 FROM 下发票 WHERE 状态='已下发'"):
             if not conn.execute(
                 "SELECT 1 FROM 开关版本 WHERE 版本键=?", (r["版本键"],)
             ).fetchone():
                 问题.append(f"悬空下发:{r['票号']}")
-        
-        
-        
-        for r in conn.execute(
-            "SELECT 票号, 缺计划 FROM 下发票 WHERE 状态='已下发'"
-        ):
+
+        for r in conn.execute("SELECT 票号, 缺计划 FROM 下发票 WHERE 状态='已下发'"):
             n = conn.execute(
                 "SELECT COUNT(*) AS c FROM 回读计划行 WHERE 票号=?", (r["票号"],)
             ).fetchone()["c"]
@@ -39,14 +34,26 @@ def 跑贯验() -> dict:
                 问题.append(f"缺计划悬挂未补建:{r['票号']}")
             elif n > 0 and r["缺计划"]:
                 问题.append(f"缺计划标记未清除:{r['票号']}")
-        
+
+        # 指纹账：已下发成功不得伴随指纹空行 / 缺行 / 串键 / 哈希不符。
+        for r in conn.execute("SELECT 票号 FROM 下发票 WHERE 状态='已下发'"):
+            证 = 指纹账.核证(conn, r["票号"])
+            if not 证["指纹有无"]:
+                问题.append(f"已下发缺快照指纹:{r['票号']}")
+            elif 证["空哈希"]:
+                问题.append(f"已下发指纹空行:{r['票号']}")
+            elif 证["邻键串用"]:
+                问题.append(f"指纹邻开关键串用:{r['票号']}")
+            elif not 证["哈希一致"]:
+                问题.append(f"指纹哈希与票面载荷不一致:{r['票号']}")
+
         for r in conn.execute("SELECT 证号, 票号, 所见版本键, 结果 FROM 回读证 WHERE 结果='确认'"):
             t = conn.execute("SELECT * FROM 下发票 WHERE 票号=?", (r["票号"],)).fetchone()
             if not t:
                 问题.append(f"悬空回读:{r['证号']}")
             elif t["版本键"] != r["所见版本键"] and t["状态"] == "已下发":
                 问题.append(f"回读版本拧花:{r['证号']}")
-        
+
         for r in conn.execute("SELECT 票号 FROM 下发票 WHERE 状态='已回滚'"):
             if not conn.execute(
                 "SELECT 1 FROM 命运账 WHERE 对象类型='下发票' AND 对象键=? AND 命运='回滚'",
@@ -68,14 +75,8 @@ def 跑贯验() -> dict:
             "下发数": 下发数,
             "回读数": 回读数,
             "命运数": 命运数,
+            "指纹数": 指纹数,
             "说明": 说明,
         }
     finally:
         conn.close()
-
-
-def _bf_touch_17(conn=None, 键: str = ""):
-    from app.modules import 下发快照指纹账 as _m
-    _ = _m.二次意图放行(conn, 键)
-    _ = _m.登记证明(conn)
-    return _m.巡检包({ "touched": True })

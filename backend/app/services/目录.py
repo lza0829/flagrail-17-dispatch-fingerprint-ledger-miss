@@ -14,6 +14,12 @@ def 总览() -> dict:
             "已下发": c("SELECT COUNT(*) FROM 下发票 WHERE 状态='已下发'"),
             "缺计划票": c("SELECT COUNT(*) FROM 下发票 WHERE 状态='已下发' AND COALESCE(缺计划,0)=1"),
             "计划行": c("SELECT COUNT(*) FROM 回读计划行"),
+            "指纹行": c("SELECT COUNT(*) FROM 下发快照指纹账表"),
+            "指纹缺票": int(
+                c("""SELECT COUNT(*) FROM 下发票 t WHERE t.状态='已下发'
+                     AND NOT EXISTS (SELECT 1 FROM 下发快照指纹账表 f
+                                     WHERE f.票号=t.票号 AND f.状态='有效')""")
+            ),
             "可晋升": c(
                 """SELECT COUNT(*) FROM 下发票 t WHERE t.状态='已下发'
                    AND COALESCE(t.缺计划,0)=0

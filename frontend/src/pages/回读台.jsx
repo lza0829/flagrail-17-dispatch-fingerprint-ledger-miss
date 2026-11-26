@@ -8,7 +8,7 @@ export default function 回读台() {
   const [讯, set讯] = useState("");
   const [坏, set坏] = useState(false);
   const [忙, set忙] = useState(false);
-  const [form, setForm] = useState({ 票号: "", 边缘键: "edge-a", 结果: "确认", 所见版本键: "" });
+  const [form, setForm] = useState({ 票号: "", 边缘键: "edge-a", 结果: "确认", 所见版本键: "", 补偿票: "" });
 
   const 刷 = async () => {
     const [z, p, c] = await Promise.all([get("/回读证"), get("/回读计划"), get("/计划核证")]);
@@ -20,10 +20,12 @@ export default function 回读台() {
     if (!form.票号 || !form.边缘键) { set坏(true); set讯("请填票号与边缘键"); return; }
     set忙(true);
     try {
-      const out = await post("/回读", {
+      const body = {
         票号: form.票号, 边缘键: form.边缘键, 结果: form.结果,
         所见版本键: form.所见版本键 || undefined,
-      });
+      };
+      if (form.补偿票.trim()) body.补偿票 = form.补偿票.trim();
+      const out = await post("/回读", body);
       set坏(false);
       set讯(`已记回读：${out.证号} → ${out.结果}${out.未齐套边缘数 ? `，未齐 ${out.未齐套边缘数} 边缘` : "，已齐套"}`);
       await 刷();
@@ -49,13 +51,14 @@ export default function 回读台() {
   };
 
   const 缺计划票 = certs.filter((c) => c.已下发 && (c.缺计划标记 || !c.计划有无));
+  const 缺指纹票 = certs.filter((c) => c.已下发 && !c.指纹有无);
 
   return (
     <div>
       <h1 className="题">回读台 · 计划核证</h1>
       <p className="述">
-        回读必须锚定同票计划行。票缺计划（明标记或有票无计划）时，确认回读一律拒绝；
-        全边缘确认齐套且无偏差，核证「可否晋升」才为真。
+        回读必须锚定同票计划行与同票快照指纹行。票缺计划（明标记或有票无计划）时，确认回读一律拒绝；
+        缺指纹或哈希对不上时回读对照亦失败（仅持同票补偿票可重钉放行）；全边缘确认齐套且无偏差，「可否晋升」才为真。
       </p>
 
       <div className="行">
@@ -74,6 +77,8 @@ export default function 回读台() {
         </select>
         <input placeholder="所见版本键（可空=票面版本）" value={form.所见版本键} style={{ minWidth: 220 }}
           onChange={(e) => setForm({ ...form, 所见版本键: e.target.value })} />
+        <input placeholder="补偿票（缺指纹时可空=拒绝）" value={form.补偿票} style={{ minWidth: 240 }}
+          onChange={(e) => setForm({ ...form, 补偿票: e.target.value })} />
         <button className="信" disabled={忙} onClick={提交回读}>提交回读</button>
       </div>
       {讯 && <p className={坏 ? "警示条" : "讯"}>{坏 ? "⚠ " : ""}{讯}</p>}
@@ -91,11 +96,18 @@ export default function 回读台() {
         </div>
       )}
 
-      <h2 className="段题">计划核证总览（票号 · 计划有无 · 缺计划标记 · 可否晋升 · valid）</h2>
+      {缺指纹票.length > 0 && (
+        <div className="警示条">
+          检测到 {缺指纹票.length} 张「已下发却缺快照指纹」票——再次意图与回读对照已闸止：
+          {缺指纹票.map((c) => <code key={c.票号} style={{ marginRight: "0.8rem" }}>{c.票号}</code>)}
+        </div>
+      )}
+
+      <h2 className="段题">计划核证总览（票号 · 计划有无 · 快照指纹 · 缺计划标记 · 可否晋升 · valid）</h2>
       {!certs.length ? <div className="空态">尚无票可核证</div> : (
         <table>
           <thead><tr>
-            <th>票号</th><th>已下发</th><th>计划有无</th><th>缺计划标记</th>
+            <th>票号</th><th>已下发</th><th>计划有无</th><th>快照指纹</th><th>缺计划标记</th>
             <th>可否晋升</th><th>valid</th><th>齐套</th><th>待回读 / 偏差</th><th>补建</th>
           </tr></thead>
           <tbody>{certs.map((c) => (
@@ -103,6 +115,12 @@ export default function 回读台() {
               <td className="票号cell">{c.票号}</td>
               <td>{String(c.已下发)}</td>
               <td><span className={"徽章 " + (c.计划有无 ? "通" : "败")}>{String(c.计划有无)}（{c.计划行数 ?? 0}）</span></td>
+              <td>{(c.指纹有无)
+                ? (c.哈希一致
+                  ? <span className="徽章 通" title={c.哈希}>指纹✓</span>
+                  : <span className="徽章 败" title={c.原因}>指纹✗</span>)
+                : <span className="徽章 败 脉">缺指纹</span>}
+                {c.补偿有无 ? <span className="徽章 警" style={{ marginLeft: 4 }}>补偿</span> : null}</td>
               <td>
                 {c.暗缺计划 ? <span className="徽章 败 脉">true·暗</span>
                   : <span className={"徽章 " + (c.缺计划标记 ? "警" : "通")}>{String(c.缺计划标记)}</span>}

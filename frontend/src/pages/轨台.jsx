@@ -44,6 +44,14 @@ export default function 轨台() {
         </Link>
       </div>
       {讯 && <p className="讯">{讯}</p>}
+      {概 && (概.指纹缺票 || 0) > 0 && (
+        <div className="警示条" style={{ maxWidth: "46rem" }}>
+          ⚠ 有 {概.指纹缺票} 张「已下发却缺快照指纹」票——同开关键再次意图与回读对照已闸止（仅持补偿票可重钉）。
+          <Link to="/指纹账" style={{ color: "inherit", fontWeight: 800, marginLeft: 8 }}>
+            去指纹账核证 / 补登 →
+          </Link>
+        </div>
+      )}
       {概 && 概.缺计划票 > 0 && (
         <div className="警示条" style={{ maxWidth: "46rem" }}>
           ⚠ 有 {概.缺计划票} 张「已下发却缺回读计划」票——禁止假成功：确认回读与全量晋升已闸止。
@@ -77,6 +85,10 @@ export default function 轨台() {
           <span title="回读计划行总数 / 当前可晋升票">
             <i>06</i>
             <b>{概.计划行 ?? 0}</b>计划行 · <b>{概.可晋升 ?? 0}</b>可晋升
+          </span>
+          <span title="快照指纹行 / 已下发缺指纹票">
+            <i>07</i>
+            <b>{概.指纹行 ?? 0}</b>指纹行 · <b style={{ color: (概.指纹缺票 || 0) > 0 ? "var(--败)" : "inherit" }}>{概.指纹缺票 ?? 0}</b>缺指纹
           </span>
         </div>
       )}

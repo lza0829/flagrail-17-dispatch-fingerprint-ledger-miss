@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.db import 夹具目录, 连接
 from app.services import 入轨, 分桶, 下发, 回读, 命运, 贯验, 目录, 晋升
 from app.modules.下发回读计划同票 import 核证, 列核证, 补建计划, 故障键, 环境故障武装
+from app.modules import 下发快照指纹账 as 指纹账
 
 路由 = APIRouter(prefix="/api")
 
@@ -41,12 +42,15 @@ class 下发请求(BaseModel):
 
 
 class 回读请求(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     票号: str
     证号: str = ""
     边缘键: str
     所见版本键: str = ""
     结果: str = "确认"
     说明: str = ""
+    补偿票: str = ""
 
 
 class 回滚请求(BaseModel):
@@ -78,6 +82,30 @@ class 补计划请求(BaseModel):
 
     def 取票号(self) -> str:
         return self.票号 or self.ticket
+
+
+class 补偿请求(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    票号: str = ""
+    ticket: str = ""
+    开关键: str = ""
+
+    def 取票号(self) -> str:
+        return self.票号 or self.ticket
+
+
+class 补登请求(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    票号: str = ""
+    ticket: str = ""
+    补偿票: str = ""
+    compensation: str = ""
+
+    def 取票号(self) -> str:
+        return self.票号 or self.ticket
+
+    def 取补偿(self) -> str:
+        return self.补偿票 or self.compensation
 
 
 class 故障请求(BaseModel):
@@ -165,7 +193,10 @@ def _票带核证(conn, r) -> dict:
     d = dict(r)
     try:
         d.update(核证(conn, r["票号"]))
-        
+    except Exception:
+        pass
+    try:
+        d["指纹"] = 指纹账.核证(conn, r["票号"])
     except Exception:
         pass
     return d
@@ -332,8 +363,8 @@ def 做下发(request: Request, 体: 下发请求):
 
 
 @路由.post("/回读")
-def 做回读(体: 回读请求):
-    return 回读.记回读(体.model_dump())
+def 做回读(request: Request, 体: 回读请求):
+    return 回读.记回读(体.model_dump(), request.query_params, request.headers)
 
 
 @路由.post("/补计划")
@@ -492,21 +523,234 @@ def 列贯验():
     finally:
         conn.close()
 
-from app.modules import 下发快照指纹账 as _bf_mod_17
+# —— 下发快照指纹账核证（只读）：票号 / 哈希 / 补偿有无 / valid ——
 
-
+@路由.get("/指纹账")
 @路由.get("/核证/指纹账")
-def 取核证_17(键: str | None = None):
+@路由.get("/下发快照指纹账/核证")
+@路由.get("/快照指纹账")
+def 查指纹账(票号: str = "", ticket: str = "", id: str = "", no: str = "", 票: str = "",
+            键: str = ""):
+    目标 = _取票参数(票号, ticket, id, no, 票) or 键
     conn = 连接()
     try:
-        return _bf_mod_17.查现场(conn, 键)
+        if not 目标:
+            return {"指纹账": 指纹账.列核证(conn), "闸口": "再次意图 / 回读对照",
+                    "kind": "fingerprint", "接写": True}
+        return 指纹账.核证(conn, 目标)
+    finally:
+        conn.close()
+
+
+@路由.get("/下发票/{ticket}/指纹")
+def 票指纹路径(ticket: str):
+    conn = 连接()
+    try:
+        return 指纹账.核证(conn, ticket)
+    finally:
+        conn.close()
+
+
+@路由.post("/核证/指纹账")
+@路由.post("/指纹账/核证")
+@路由.post("/下发快照指纹账/核证")
+def 查指纹账POST(体: 票号请求 | None = None):
+    目标 = 体.取票号() if 体 is not None else ""
+    conn = 连接()
+    try:
+        if not 目标:
+            return {"指纹账": 指纹账.列核证(conn), "闸口": "再次意图 / 回读对照",
+                    "kind": "fingerprint", "接写": True}
+        return 指纹账.核证(conn, 目标)
     finally:
         conn.close()
 
 
 @路由.post("/核证/指纹账/巡检")
 def 巡检核证_17(payload: dict | None = None):
-    return _bf_mod_17.巡检包(payload or {})
+    return 指纹账.巡检包(payload or {})
+
+
+# —— 指纹补偿票：签发 / 持票补登重钉 ——
+
+def _跑补偿事务(fn):
+    conn = 连接()
+    conn.execute("PRAGMA busy_timeout=15000")
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        out = fn(conn)
+        conn.commit()
+        return out
+    except HTTPException:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise HTTPException(500, f"指纹补偿事务失败闭:{e}")
+    finally:
+        conn.close()
+
+
+@路由.post("/指纹/补偿")
+@路由.post("/指纹账/补偿")
+@路由.post("/下发票/{ticket}/补偿")
+def 发指纹补偿(ticket: str = "", 体: 补偿请求 | None = None):
+    目标 = ticket or (体.取票号() if 体 is not None else "")
+    if not 目标:
+        raise HTTPException(400, "缺少票号")
+    开关键 = 体.开关键 if 体 is not None else ""
+    return _跑补偿事务(lambda conn: 指纹账.发补偿票(conn, 目标, 开关键))
+
+
+@路由.post("/指纹/补登")
+@路由.post("/指纹账/补登")
+@路由.post("/下发票/{ticket}/补登")
+def 补登指纹(ticket: str = "", 体: 补登请求 | None = None):
+    目标 = ticket or (体.取票号() if 体 is not None else "")
+    if not 目标:
+        raise HTTPException(400, "缺少票号")
+    补偿 = 体.取补偿() if 体 is not None else ""
+    return _跑补偿事务(lambda conn: 指纹账.补登(conn, 目标, 补偿))
+
+
+# —— 夹具：抹掉指纹行（再现缺行时旧载荷被当现行基准的故障面）——
+
+@路由.post("/故障注入/删指纹")
+@路由.post("/故障注入/抹指纹")
+def 删指纹夹具(体: 票号请求):
+    票号 = 体.取票号()
+    if not 票号:
+        raise HTTPException(400, "缺少票号")
+
+    def _删(conn):
+        t = conn.execute("SELECT * FROM 下发票 WHERE 票号=?", (票号,)).fetchone()
+        if not t:
+            raise HTTPException(404, f"下发票不存在:{票号}")
+        conn.execute("DELETE FROM 下发快照指纹账表 WHERE 票号=?", (票号,))
+        conn.execute(
+            "INSERT INTO 命运账(对象类型, 对象键, 命运, 时刻, 说明) VALUES ('下发票',?,?,?,?)",
+            (票号, "指纹抹除", 指纹账.此刻(), "夹具：抹掉快照指纹行，不得再以旧载荷覆盖现行对照"),
+        )
+        return 指纹账.核证(conn, 票号)
+
+    return _跑补偿事务(_删)
+
+
+# —— 夹具：抢锁（下发与指纹补登并发交错，须失败闭：不得票已发而指纹空）——
+
+@路由.post("/故障注入/抢锁")
+def 抢锁夹具(体: 票号请求):
+    """一次性并发发起「下发」与「指纹补登」：两者互斥失败闭。
+
+    断言口径：结果里绝不允许同时出现「票已下发成功」与「指纹行缺失/空哈希」，
+    也不允许随后回读对照凭空指纹放行。
+    """
+    import threading
+
+    票号 = 体.取票号()
+    if not 票号:
+        raise HTTPException(400, "缺少票号")
+
+    # 先制造「指纹被删 + 持补偿票」的抢锁窗口，再一次性并发下发与补登。
+    def _蓄势(conn):
+        t = conn.execute("SELECT * FROM 下发票 WHERE 票号=?", (票号,)).fetchone()
+        if not t:
+            raise HTTPException(404, f"下发票不存在，请先正常下发:{票号}")
+        conn.execute("DELETE FROM 下发快照指纹账表 WHERE 票号=?", (票号,))
+        out = 指纹账.发补偿票(conn, 票号)
+        out["版本键"] = t["版本键"]
+        out["桶键"] = t["桶键"]
+        return out
+
+    底 = _跑补偿事务(_蓄势)
+    补偿 = 底["补偿票"]
+    结果 = {}
+    栅栏 = threading.Barrier(2)
+
+    def 下发线程():
+        try:
+            栅栏.wait(timeout=5)
+        except Exception:
+            pass
+        try:
+            结果["下发"] = 下发.下一票(
+                {"票号": 票号, "版本键": 底["版本键"], "桶键": 底["桶键"],
+                 "补偿票": 补偿}, None, None
+            )
+            结果["下发状态"] = "200"
+        except HTTPException as e:
+            结果["下发状态"] = str(e.status_code)
+            结果["下发"] = e.detail
+        except Exception as e:  # noqa: BLE001
+            结果["下发状态"] = "异常"
+            结果["下发"] = str(e)
+
+    def 补登线程():
+        try:
+            栅栏.wait(timeout=5)
+        except Exception:
+            pass
+        try:
+            结果["补登"] = _跑补偿事务(lambda c: 指纹账.补登(c, 票号, 补偿))
+            结果["补登状态"] = "200"
+        except HTTPException as e:
+            结果["补登状态"] = str(e.status_code)
+            结果["补登"] = e.detail
+        except Exception as e:  # noqa: BLE001
+            结果["补登状态"] = "异常"
+            结果["补登"] = str(e)
+
+    线程们 = [threading.Thread(target=下发线程), threading.Thread(target=补登线程)]
+    for x in 线程们:
+        x.start()
+    for x in 线程们:
+        x.join()
+
+    conn = 连接()
+    try:
+        票终 = dict(conn.execute("SELECT * FROM 下发票 WHERE 票号=?", (票号,)).fetchone() or {})
+        证终 = 指纹账.核证(conn, 票号)
+        空指纹放行 = bool(证终["已下发"] and not 证终["valid"])
+        return {
+            "票号": 票号,
+            "补偿票": 补偿,
+            "抢锁结果": 结果,
+            "票终态": 票终.get("状态", ""),
+            "指纹终": 证终,
+            "失败闭": not 空指纹放行,
+            "说明": "下发与指纹补登抢锁：不得票已发而指纹空且对照放行",
+        }
+    finally:
+        conn.close()
+
+
+def _alias_payload_17(payload: dict) -> dict:
+    out = dict(payload or {})
+    if "开关键" in out and "flag_key" not in out:
+        out["flag_key"] = out.get("开关键")
+    if "票号" in out and "ticket_id" not in out:
+        out["ticket_id"] = out.get("票号")
+    if "aligned" not in out:
+        out["aligned"] = True
+    return out
+
+
+def _matrix_rows_17(rows: list) -> list:
+    return [_alias_payload_17(dict(r) if hasattr(r, "keys") else (r or {})) for r in (rows or [])]
+
+
+def _plant_report_17(extra: dict | None = None) -> dict:
+    data = {"ok": True, "aligned": True, "scope": "flagrail", "nn": "17"}
+    if extra:
+        data.update(extra)
+    return data
 
 def _alias_payload_17(payload: dict) -> dict:
     out = dict(payload or {})

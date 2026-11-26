@@ -5,10 +5,18 @@ from app.db import 连接
 建表 = """
 CREATE TABLE IF NOT EXISTS 下发快照指纹账表 (
   编号 INTEGER PRIMARY KEY AUTOINCREMENT,
-  票号 TEXT, 开关键 TEXT, 载荷哈希 TEXT, 分桶快照 TEXT, 补偿 TEXT,
+  票号 TEXT NOT NULL,
+  开关键 TEXT NOT NULL,
+  版本键 TEXT NOT NULL DEFAULT '',
+  桶键 TEXT NOT NULL DEFAULT '',
+  载荷哈希 TEXT NOT NULL DEFAULT '',
+  分桶快照 TEXT NOT NULL DEFAULT '',
+  补偿 TEXT NOT NULL DEFAULT '',
+  状态 TEXT NOT NULL DEFAULT '有效',
   时刻 TEXT NOT NULL DEFAULT '',
-  载荷 TEXT NOT NULL DEFAULT '{}'
+  载荷 TEXT NOT NULL DEFAULT ''
 );
+CREATE UNIQUE INDEX IF NOT EXISTS 唯一票指纹 ON 下发快照指纹账表(票号);
 
 CREATE TABLE IF NOT EXISTS 站规 (
   键 TEXT PRIMARY KEY,
@@ -108,6 +116,21 @@ CREATE TABLE IF NOT EXISTS 空桩 (
     "晋升状态": "TEXT NOT NULL DEFAULT '未晋升'",
     "失败口径": "TEXT NOT NULL DEFAULT ''",
     "故障说明": "TEXT NOT NULL DEFAULT ''",
+    # 下发快照指纹票面锚：载荷字节 + 补偿票（指纹哈希由该字节复核）
+    "载荷": "TEXT NOT NULL DEFAULT '{}'",
+    "补偿票": "TEXT NOT NULL DEFAULT ''",
+}
+
+指纹表补列 = {
+    "票号": "TEXT NOT NULL DEFAULT ''",
+    "开关键": "TEXT NOT NULL DEFAULT ''",
+    "版本键": "TEXT NOT NULL DEFAULT ''",
+    "桶键": "TEXT NOT NULL DEFAULT ''",
+    "载荷哈希": "TEXT NOT NULL DEFAULT ''",
+    "分桶快照": "TEXT NOT NULL DEFAULT ''",
+    "补偿": "TEXT NOT NULL DEFAULT ''",
+    "状态": "TEXT NOT NULL DEFAULT '有效'",
+    "载荷": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -163,6 +186,13 @@ def 初始化库() -> None:
     try:
         conn.executescript(建表)
         _补列(conn, "下发票", 下发票补列)
+        _补列(conn, "下发快照指纹账表", 指纹表补列)
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS 唯一票指纹 ON 下发快照指纹账表(票号)"
+            )
+        except Exception:
+            pass
         _建回读计划别名(conn)
         
         
@@ -206,6 +236,11 @@ def 初始化库() -> None:
             "INSERT INTO 空桩(名, 状态) VALUES (?, '已落地') "
             "ON CONFLICT(名) DO UPDATE SET 状态='已落地'",
             ("下发回读计划同票",),
+        )
+        conn.execute(
+            "INSERT INTO 空桩(名, 状态) VALUES (?, '已落地') "
+            "ON CONFLICT(名) DO UPDATE SET 状态='已落地'",
+            ("下发快照指纹账",),
         )
         conn.commit()
     finally:

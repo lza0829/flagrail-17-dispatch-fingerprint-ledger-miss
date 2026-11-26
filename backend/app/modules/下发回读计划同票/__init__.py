@@ -320,19 +320,38 @@ def 补建计划(体: dict) -> dict:
         if not edges:
             raise HTTPException(400, "计划边缘为空，无法补建")
         写计划行(conn, 票号, edges)
-        if t["状态"] in ("下发失败", "待下发"):
+        if t["状态"] == "已下发":
+            # 保持已下发：若指纹缺失/不符，补计划不得把票留在「已下发却指纹空」；
+            # 须持同票补偿票才能同事务重钉，否则整体失败闭。
+            from app.modules import 下发快照指纹账 as 指纹账
+            if not 指纹账.核证(conn, 票号)["valid"]:
+                补偿 = 指纹账.取补偿票(体)
+                if not 指纹账.补偿有效(dict(t), 补偿):
+                    raise HTTPException(
+                        400,
+                        {
+                            "票号": 票号, "拒绝": True,
+                            "原因": "票已下发但快照指纹缺失/不符，且未持补偿票：补计划失败闭",
+                            "valid": False,
+                        },
+                    )
+                指纹账.票指纹(conn, dict(t), edges)
+            conn.execute(
+                "UPDATE 下发票 SET 缺计划=0, 失败口径='', 故障说明='' WHERE 票号=?", (票号,)
+            )
+            命运 = "补建计划"
+        else:
             conn.execute(
                 """UPDATE 下发票 SET 状态='已下发', 缺计划=0, 失败口径='', 故障说明='',
                    下发时=?, 世代=世代+1 WHERE 票号=?""",
                 (此刻(), 票号),
             )
             conn.execute("UPDATE 开关版本 SET 状态='灰度中' WHERE 版本键=?", (t["版本键"],))
+            # 已下发成功不得伴随指纹空行：补建入轨须同事务落快照指纹。
+            from app.modules import 下发快照指纹账 as 指纹账
+            t2 = dict(conn.execute("SELECT * FROM 下发票 WHERE 票号=?", (票号,)).fetchone())
+            指纹账.票指纹(conn, t2, edges)
             命运 = "补计划重下发"
-        else:
-            conn.execute(
-                "UPDATE 下发票 SET 缺计划=0, 失败口径='', 故障说明='' WHERE 票号=?", (票号,)
-            )
-            命运 = "补建计划"
         conn.execute(
             "INSERT INTO 命运账(对象类型, 对象键, 命运, 时刻, 说明) VALUES ('下发票',?,?,?,?)",
             (票号, 命运, 此刻(), "补建同票回读计划并清除缺计划标记"),
